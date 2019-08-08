@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-#  Copyright (c) 2013 SWITCH http://www.switch.ch
-#
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 #  You may obtain a copy of the License at
@@ -20,6 +18,7 @@ import argparse
 import os
 import subprocess
 import sys
+from json import loads
 
 __version__ = '1.6.0'
 
@@ -32,43 +31,44 @@ STATUS_WARNING = 1
 STATUS_ERROR = 2
 STATUS_UNKNOWN = 3
 
+
 def main():
 
     # parse args
     parser = argparse.ArgumentParser(description="'ceph df' nagios plugin.")
-    parser.add_argument('-e','--exe', help='ceph executable [%s]' % CEPH_COMMAND)
-    parser.add_argument('-c','--conf', help='alternative ceph conf file')
-    parser.add_argument('-m','--monaddress', help='ceph monitor address[:port]')
-    parser.add_argument('-i','--id', help='ceph client id')
-    parser.add_argument('-n','--name', help='ceph client name')
-    parser.add_argument('-k','--keyring', help='ceph client keyring file')
-    parser.add_argument('-p','--pool', help='ceph pool name')
-    parser.add_argument('-d','--detail', help="show pool details on warn and critical", action='store_true')
-    parser.add_argument('-W','--warn', help="warn above this percent RAW USED", type=float)
-    parser.add_argument('-C','--critical', help="critical alert above this percent RAW USED", type=float)
-    parser.add_argument('-V','--version', help='show version and exit', action='store_true')
+    parser.add_argument('-e', '--exe', help='ceph executable [%s]' % CEPH_COMMAND)
+    parser.add_argument('-c', '--conf', help='alternative ceph conf file')
+    parser.add_argument('-m', '--monaddress', help='ceph monitor address[:port]')
+    parser.add_argument('-i', '--id', help='ceph client id')
+    parser.add_argument('-n', '--name', help='ceph client name')
+    parser.add_argument('-k', '--keyring', help='ceph client keyring file')
+    parser.add_argument('-p', '--pool', help='ceph pool name')
+    parser.add_argument('-d', '--detail', help="show pool details on warn and critical", action='store_true')
+    parser.add_argument('-W', '--warn', help="warn above this percent RAW USED", type=float)
+    parser.add_argument('-C', '--critical', help="critical alert above this percent RAW USED", type=float)
+    parser.add_argument('-V', '--version', help='show version and exit', action='store_true')
     args = parser.parse_args()
 
     # validate args
     ceph_exec = args.exe if args.exe else CEPH_COMMAND
     if not os.path.exists(ceph_exec):
-        print "ERROR: ceph executable '%s' doesn't exist" % ceph_exec
+        print("ERROR: ceph executable '%s' doesn't exist" % ceph_exec)
         return STATUS_UNKNOWN
 
     if args.version:
-        print 'version %s' % __version__
+        print("version %s" % __version__)
         return STATUS_OK
 
     if args.conf and not os.path.exists(args.conf):
-        print "ERROR: ceph conf file '%s' doesn't exist" % args.conf
+        print("ERROR: ceph conf file '%s' doesn't exist" % args.conf)
         return STATUS_UNKNOWN
 
     if args.keyring and not os.path.exists(args.keyring):
-        print "ERROR: keyring file '%s' doesn't exist" % args.keyring
+        print("ERROR: keyring file '%s' doesn't exist" % args.keyring)
         return STATUS_UNKNOWN
 
     if args.warn > args.critical or not args.warn or not args.critical:
-        print "ERROR: warn and critical level must be set and critical must be greater than warn"
+        print("ERROR: warn and critical level must be set and critical must be greater than warn")
         return STATUS_UNKNOWN
 
     # build command
@@ -89,106 +89,55 @@ def main():
         ceph_df.append('--keyring')
         ceph_df.append(args.keyring)
     ceph_df.append('df')
-
-    #print ceph_df
+    ceph_df.append('detail')
+    ceph_df.append('--format')
+    ceph_df.append('json')
 
     # exec command
-    p = subprocess.Popen(ceph_df,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    p = subprocess.Popen(ceph_df, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, err = p.communicate()
 
     # parse output
-    # print "DEBUG: output:", output
-    # print "DEBUG: err:", err
     if output:
-        # parse output
-        # if detail switch was not set only show global values and compare to warning and critical
-        # otherwise show space for pools too
-        result=output.splitlines()
-        # values for GLOBAL are in 3rd line of output
-        globalline = result[2]
-        globalvals = globalline.split()
-        # Luminous vs Minic output (27.3TiB vs 27.3 TiB)
-        if len(globalvals) == 7:
-            gv = []
-            gv.append("{}{}".format(globalvals[0], globalvals[1]))
-            gv.append("{}{}".format(globalvals[2], globalvals[3]))
-            gv.append("{}{}".format(globalvals[4], globalvals[5]))
-            gv.append(globalvals[6])
-            globalvals = gv
-            #print "XXX: globalvals: {} {}".format(len(globalvals), globalvals)
-
-        # prepare pool values
-        # pool output starts in line 4 with the bare word POOLS: followed by the output
-        poollines = result[3:]
+        ceph_df_detail = loads(output)
 
         if args.pool:
-            for line in poollines:
-                if args.pool in line:
-                    poolvals = line.split()
-                    # Luminous vs Minic output (27.3TiB vs 27.3 TiB)
-                    if len(poolvals) == 8:
-                        pv = []
-                        pv.append(poolvals[0]) # NAME
-                        pv.append(poolvals[1]) # ID
-                        pv.append("{}{}".format(poolvals[2], poolvals[3])) # USED 27.3 TiB
-                        pv.append(poolvals[4]) # %USED
-                        pv.append("{}{}".format(poolvals[5], poolvals[6])) # MAX AVAIL 27.3 TiB
-                        pv.append(poolvals[7]) # OBJECTS
-                        poolvals = pv
-                        #print "XXX: poolvals: {} {}".format(len(poolvals), poolvals)
-
-                    pool_used = poolvals[2]
-                    pool_usage_percent = float(poolvals[3])
-                    pool_available_space = poolvals[4]
-                    pool_objects = float(poolvals[5])
+            for pool in ceph_df_detail['pools']:
+                if args.pool == pool['name']:
+                    pool_usage_percent = round(float(pool['stats']['percent_used']), 4)
 
                     if pool_usage_percent > args.critical:
-                        print 'CRITICAL: %s%% usage in Pool \'%s\' is above %s%% (%s used) | Usage=%s%%;%s;%s;;' % (pool_usage_percent, args.pool, args.critical, pool_used, pool_usage_percent, args.warn, args.critical)
+                        print("CRITICAL: {} usage in {} pool is above {}".format(pool_usage_percent, args.pool, args.critical))
                         return STATUS_ERROR
-                    if pool_usage_percent > args.warn:
-                        print 'WARNING: %s%% usage in Pool \'%s\' is above %s%% (%s used) | Usage=%s%%;%s;%s;;' % (pool_usage_percent, args.pool, args.warn, pool_used, pool_usage_percent, args.warn, args.critical)
+                    elif pool_usage_percent > args.warn:
+                        print("WARNING: {} usage in {} pool is above {}".format(pool_usage_percent, args.pool, args.warn, ))
                         return STATUS_WARNING
                     else:
-                        print '%s%% usage in Pool \'%s\' | Usage=%s%%;%s;%s;;' % (pool_usage_percent, args.pool, pool_usage_percent, args.warn, args.critical)
+                        print("{} pool usage of {} is ok".format(args.pool, pool_usage_percent))
                         return STATUS_OK
         else:
-            # print 'DEBUG:', globalvals
-            # finally 4th element contains percentual value
-            # print 'DEBUG USAGE:', globalvals[3]
-            global_usage_percent = float(globalvals[3])
-            global_available_space = globalvals[1]
-            global_total_space = globalvals[0]
-            # print 'DEBUG WARNLEVEL:', args.warn
-            # print 'DEBUG CRITICALLEVEL:', args.critical
-            if global_usage_percent > args.critical:
-                if args.detail:
-                        poollines.insert(0, '\n')
-                        poolout = '\n '.join(poollines)
-                else:
-                        poolout = ''
-                print 'CRITICAL: global RAW usage of %s%% is above %s%% (%s of %s free)%s | Usage=%s%%;%s;%s;;' % (global_usage_percent, args.critical, global_available_space, global_total_space, poolout, global_usage_percent, args.warn, args.critical)
+            total_used_raw_ratio, total_used_raw_bytes, total_used_bytes, total_bytes, total_avail_bytes = ceph_df_detail['stats'].values()
+            raw_percentage_usage = round(float(total_used_raw_ratio) * 100, 2)
+            raw_gigabytes_usage = int(total_used_raw_bytes) / (1 << 30)
+            gigabytes_usage = int(total_used_bytes) / (1 << 30)
+
+            if raw_percentage_usage > args.critical:
+                print("CRITICAL: RAW usage of {} is above critical level {}".format(raw_percentage_usage, args.critical))
                 return STATUS_ERROR
-            elif global_usage_percent > args.warn:
-                if args.detail:
-                        poollines.insert(0, '\n')
-                        poolout = '\n '.join(poollines)
-                else:
-                        poolout = ''
-                print 'WARNING: global RAW usage of %s%% is above %s%% (%s of %s free)%s | Usage=%s%%;%s;%s;;' % (global_usage_percent, args.warn, global_available_space, global_total_space, poolout, global_usage_percent, args.warn, args.critical)
+            elif raw_percentage_usage > args.warn:
+                print("WARNING: RAW usage of {} is above warning level {}".format(raw_percentage_usage, args.warn))
                 return STATUS_WARNING
             else:
-                print 'RAW usage %s%% | Usage=%s%%;%s;%s;;' % (global_usage_percent, global_usage_percent, args.warn, args.critical)
+                print("RAW usage of {} is ok".format(raw_percentage_usage))
                 return STATUS_OK
-
-        #for
     elif err:
         # read only first line of error
         one_line = err.split('\n')[0]
         if '-1 ' in one_line:
             idx = one_line.rfind('-1 ')
-            print 'ERROR: %s: %s' % (ceph_exec, one_line[idx+len('-1 '):])
+            print("ERROR: %s: %s" % (ceph_exec, one_line[idx+len('-1 '):]))
         else:
-            print one_line
+            print(one_line)
 
     return STATUS_UNKNOWN
 
